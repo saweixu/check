@@ -7,7 +7,22 @@ import streamlit as st
 from openpyxl import load_workbook
 from openpyxl.utils.cell import coordinate_to_tuple
 
-st.set_page_config(page_title="Final Check - Invoice Container Review", layout="wide")
+import streamlit as st
+
+# CONFIG (toujours en premier)
+st.set_page_config(
+    page_title="Athina Logistics Tool",
+    page_icon="logo.png",
+    layout="wide"
+)
+
+# 👇 ICI tu mets ton logo sidebar
+st.sidebar.image("logo.png", width=200)
+
+# TON APP
+st.title("HS Code Analyzer from Invoices")
+
+st.write("Upload your invoices...")
 
 # =========================
 # Helpers
