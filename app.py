@@ -21,10 +21,6 @@ st.sidebar.image("logo.png", width=200)
 st.sidebar.markdown("### Athina Logistics")
 st.sidebar.caption("Global Access")
 
-# TON APP
-st.title("HS Code Analyzer from Invoices")
-
-st.write("Upload your invoices...")
 
 # =========================
 # Helpers
