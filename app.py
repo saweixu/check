@@ -17,7 +17,7 @@ st.set_page_config(
 )
 
 # 👇 ICI tu mets ton logo sidebar
-st.sidebar.image("assets/logo.png", width=200)
+st.sidebar.image("logo.png", width=200)
 st.sidebar.markdown("### Athina Logistics")
 st.sidebar.caption("Global Access")
 
