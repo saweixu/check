@@ -783,10 +783,25 @@ if uploaded_files:
         1 for r in results if r["error_count"] == 0 and r["warning_count"] == 0
     )
 
-    c1, c2, c3 = st.columns(3)
+    total_cartons = Decimal("0")
+    total_gross_weight = Decimal("0")
+
+    for r in results:
+        cartons = to_decimal(r["info"].get("cartons", ""))
+        gross = to_decimal(r["info"].get("gross_weight", ""))
+
+        if cartons is not None:
+            total_cartons += cartons
+
+        if gross is not None:
+            total_gross_weight += gross
+
+    c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Files checked", total_files)
     c2.metric("Files with errors", files_with_errors)
     c3.metric("Files with warnings only", files_with_warnings_only)
+    c4.metric("Total cartons", f"{total_cartons:,.0f}")
+    c5.metric("Total gross weight", f"{total_gross_weight:,.2f}")
 
     if files_ok:
         st.success(f"{files_ok} file(s) passed with no issues.")
