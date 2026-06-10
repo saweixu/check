@@ -548,11 +548,377 @@ def build_result(fname, errors, warnings, info):
 
 
 # =========================
-# SGS GENERATION
+# SGS GENERATION - SMART VERSION
+# Logic replaced with summary_hs_code.py aggregation,
+# but output remains ONLY the SGS template file.
 # =========================
-def extract_invoice_number(filename):
-    name = Path(filename).stem
-    return name.split("-")[-1]
+def sgs_to_float(value) -> float:
+    if value is None:
+        return 0.0
+    if isinstance(value, (int, float)):
+        return float(value)
+    s = str(value).strip()
+    if not s:
+        return 0.0
+    s = s.replace(" ", "")
+    if s.count(",") and s.count("."):
+        if s.rfind(",") > s.rfind("."):
+            s = s.replace(".", "").replace(",", ".")
+        else:
+            s = s.replace(",", "")
+    else:
+        s = s.replace(",", ".")
+    try:
+        return float(s)
+    except Exception:
+        return 0.0
+
+
+def sgs_find_header_row_by_keyword(ws, col, keyword):
+    for row in range(1, ws.max_row + 1):
+        v = ws.cell(row=row, column=col).value
+        if isinstance(v, str) and keyword in v:
+            return row
+    return None
+
+
+def sgs_merged_top_left(ws, row, col):
+    for rng in ws.merged_cells.ranges:
+        if rng.min_row <= row <= rng.max_row and rng.min_col <= col <= rng.max_col:
+            return rng.min_row, rng.min_col, str(rng)
+    return row, col, None
+
+
+def sgs_get_cell_value_merged(ws, row, col):
+    r0, c0, rng = sgs_merged_top_left(ws, row, col)
+    return ws.cell(row=r0, column=c0).value, rng
+
+
+def sgs_norm_desc(s):
+    if s is None:
+        return ""
+    s = str(s).strip().lower()
+    s = " ".join(s.split())
+    s = "".join(ch if ch.isalnum() or ch.isspace() else " " for ch in s)
+    return " ".join(s.split())
+
+
+def sgs_parse_invoice(ws):
+    sub_order_no = ws["C5"].value or ""
+    header_row = sgs_find_header_row_by_keyword(ws, col=2, keyword="Description of Goods")
+    if header_row is None:
+        return [], str(sub_order_no).strip()
+
+    products = []
+    for r in range(header_row + 1, ws.max_row + 1):
+        desc = ws.cell(row=r, column=2).value
+        if desc is None:
+            break
+        if isinstance(desc, str) and desc.strip().upper() == "SUM":
+            break
+
+        hs = ws.cell(row=r, column=3).value
+        val = ws.cell(row=r, column=9).value
+        mark = ws.cell(row=r, column=7).value
+
+        if hs is None or desc is None:
+            continue
+
+        products.append({
+            "hs_code": str(hs).strip(),
+            "desc": str(desc).strip(),
+            "custom_value": sgs_to_float(val),
+            "mark": str(mark).strip() if mark not in (None, "") else "",
+            "sub_order_no": str(sub_order_no).strip(),
+        })
+
+    return products, str(sub_order_no).strip()
+
+
+def sgs_build_invoice_index(products):
+    from collections import defaultdict
+    by_mark_desc_seq = defaultdict(list)
+    by_desc = defaultdict(list)
+
+    for p in products:
+        if p.get("mark"):
+            by_mark_desc_seq[(p["mark"], p["desc"])].append(p["hs_code"])
+        by_desc[p["desc"]].append(p["hs_code"])
+
+    return by_mark_desc_seq, by_desc
+
+
+def sgs_parse_packing_list_rows(ws):
+    header_row = sgs_find_header_row_by_keyword(ws, col=2, keyword="Description of Goods")
+    if header_row is None:
+        return []
+
+    rows = []
+    for r in range(header_row + 1, ws.max_row + 1):
+        desc = ws.cell(row=r, column=2).value
+        if desc is None:
+            break
+        if isinstance(desc, str) and desc.strip().upper() == "SUM":
+            break
+
+        mark_val, _ = sgs_get_cell_value_merged(ws, r, 5)  # E
+        carton_val, carton_rng = sgs_get_cell_value_merged(ws, r, 7)  # G
+        net_val, net_rng = sgs_get_cell_value_merged(ws, r, 9)  # I
+        gross_val, gross_rng = sgs_get_cell_value_merged(ws, r, 10)  # J
+
+        rows.append({
+            "desc": str(desc).strip(),
+            "mark": str(mark_val).strip() if mark_val not in (None, "") else "",
+            "carton": sgs_to_float(carton_val),
+            "net": sgs_to_float(net_val),
+            "gross": sgs_to_float(gross_val),
+            "carton_rng": carton_rng or f"R{r}C7",
+            "net_rng": net_rng or f"R{r}C9",
+            "gross_rng": gross_rng or f"R{r}C10",
+        })
+
+    return rows
+
+
+def sgs_collect_from_uploaded_file(uploaded_file):
+    from collections import Counter
+
+    raw = uploaded_file.getvalue()
+    wb = load_workbook(io.BytesIO(raw), data_only=True)
+
+    ws_inv = sheet_by_name_ci(wb, "INVOICE")
+    ws_pl = sheet_by_name_ci(wb, "PACKING LIST")
+
+    if ws_inv is None or ws_pl is None:
+        return [], [], []
+
+    inv_products, sub_order_no = sgs_parse_invoice(ws_inv)
+    by_mark_desc_seq, by_desc = sgs_build_invoice_index(inv_products)
+    pl_rows = sgs_parse_packing_list_rows(ws_pl)
+
+    groups = []
+    idx_map = {}
+    for pr in pl_rows:
+        crng = pr["carton_rng"]
+        if crng not in idx_map:
+            idx_map[crng] = len(groups)
+            groups.append({"carton_rng": crng, "rows": []})
+        groups[idx_map[crng]]["rows"].append(pr)
+
+    group_calc = []
+    pl_md_counter = Counter()
+
+    for g in groups:
+        rows = g["rows"]
+        if not rows:
+            continue
+
+        total_cartons = float(rows[0]["carton"] or 0.0)
+        n = len(rows)
+
+        hs_list = []
+        for pr in rows:
+            if pr["mark"] and (pr["mark"], pr["desc"]) in by_mark_desc_seq:
+                seq = by_mark_desc_seq[(pr["mark"], pr["desc"])]
+                idx = pl_md_counter[(pr["mark"], pr["desc"])]
+                if idx >= len(seq):
+                    idx = len(seq) - 1
+                hs = seq[idx] if seq else "PL_UNMATCHED"
+                pl_md_counter[(pr["mark"], pr["desc"])] += 1
+            else:
+                cands = by_desc.get(pr["desc"], [])
+                if cands:
+                    freq = {}
+                    for h in cands:
+                        freq[h] = freq.get(h, 0) + 1
+                    hs = sorted(freq.items(), key=lambda x: (-x[1], x[0]))[0][0]
+                else:
+                    hs = "PL_UNMATCHED"
+            hs_list.append(hs)
+
+        cartons_assigned = [0.0] * n
+        if total_cartons <= 0:
+            pass
+        elif total_cartons >= n:
+            for i in range(n - 1):
+                cartons_assigned[i] = 1.0
+            cartons_assigned[n - 1] = float(total_cartons - (n - 1))
+        else:
+            for i in range(int(total_cartons)):
+                cartons_assigned[i] = 1.0
+
+        recipient_idx = None
+        for i in range(n - 1, -1, -1):
+            if cartons_assigned[i] > 0:
+                recipient_idx = i
+                break
+
+        group_calc.append({
+            "rows": rows,
+            "hs_list": hs_list,
+            "cartons_assigned": cartons_assigned,
+            "recipient_idx": recipient_idx,
+            "total_cartons": total_cartons,
+        })
+
+    # SMART HOLDER v2 from summary_hs_code.py
+    group_appear = []
+    for gc in group_calc:
+        seen = set()
+        for i, pr in enumerate(gc["rows"]):
+            seen.add((gc["hs_list"][i], sgs_norm_desc(pr["desc"])))
+        group_appear.append(seen)
+
+    occ_counter = Counter()
+    for seen in group_appear:
+        for k in seen:
+            occ_counter[k] += 1
+
+    assigned_carton_so_far = Counter()
+
+    for gc in group_calc:
+        rows = gc["rows"]
+        hs_list = gc["hs_list"]
+        n = len(rows)
+        total_cartons = int(gc["total_cartons"] or 0)
+        cartons_assigned = [0.0] * n
+
+        if total_cartons <= 0:
+            pass
+        elif total_cartons >= n:
+            for i in range(n):
+                cartons_assigned[i] = 1.0
+            extra = total_cartons - n
+            if extra > 0:
+                cartons_assigned[0] += float(extra)
+        else:
+            weights = []
+            for i, pr in enumerate(rows):
+                k = (hs_list[i], sgs_norm_desc(pr["desc"]))
+                net_hint = float(pr.get("net") or 0.0)
+                weights.append((assigned_carton_so_far[k], occ_counter[k], -net_hint, i))
+            weights.sort()
+            for idx in [w[-1] for w in weights[:total_cartons]]:
+                cartons_assigned[idx] = 1.0
+
+        recipient_idx = None
+        for i in range(n):
+            if cartons_assigned[i] > 0:
+                recipient_idx = i
+                break
+
+        for i in range(n):
+            if cartons_assigned[i] > 0:
+                k = (hs_list[i], sgs_norm_desc(rows[i]["desc"]))
+                assigned_carton_so_far[k] += cartons_assigned[i]
+
+        gc["cartons_assigned"] = cartons_assigned
+        gc["recipient_idx"] = recipient_idx
+
+    used_gross_rng = set()
+    used_net_rng = set()
+    pl_lines = []
+    transfers = []
+
+    for gc in group_calc:
+        rows = gc["rows"]
+        hs_list = gc["hs_list"]
+        cartons_assigned = gc["cartons_assigned"]
+        recipient_idx = gc.get("recipient_idx")
+
+        if recipient_idx is not None:
+            r_key = (hs_list[recipient_idx], rows[recipient_idx]["desc"])
+        else:
+            r_key = None
+
+        for i, pr in enumerate(rows):
+            net_contrib = float(pr.get("net") or 0.0)
+            if pr.get("net_rng") in used_net_rng:
+                net_contrib = 0.0
+            else:
+                used_net_rng.add(pr.get("net_rng"))
+
+            gross_contrib = float(pr.get("gross") or 0.0)
+            if pr.get("gross_rng") in used_gross_rng:
+                gross_contrib = 0.0
+            else:
+                used_gross_rng.add(pr.get("gross_rng"))
+
+            pl_lines.append((hs_list[i], pr["desc"], cartons_assigned[i], net_contrib, gross_contrib, sub_order_no))
+
+            if cartons_assigned[i] == 0.0 and r_key is not None and i != recipient_idx:
+                transfers.append(((hs_list[i], pr["desc"]), r_key, gross_contrib))
+
+    value_lines = []
+    for p in inv_products:
+        value_lines.append((p.get("hs_code", ""), p.get("desc", ""), p.get("custom_value", 0.0), sub_order_no))
+
+    return value_lines, pl_lines, transfers
+
+
+def sgs_aggregate(value_lines, pl_lines, transfers=None):
+    from collections import defaultdict
+    agg = defaultdict(lambda: {"carton": 0.0, "net": 0.0, "gross": 0.0, "value": 0.0, "invoices": set()})
+
+    for hs, desc, val, inv in value_lines:
+        key = (hs, desc)
+        agg[key]["value"] += float(val or 0.0)
+        if inv:
+            agg[key]["invoices"].add(inv)
+
+    for hs, desc, carton, net, gross, inv in pl_lines:
+        key = (hs, desc)
+        agg[key]["carton"] += float(carton or 0.0)
+        agg[key]["net"] += float(net or 0.0)
+        agg[key]["gross"] += float(gross or 0.0)
+        if inv:
+            agg[key]["invoices"].add(inv)
+
+    if transfers:
+        for (from_hs, from_desc), (to_hs, to_desc), amt in transfers:
+            try:
+                amt = float(amt or 0.0)
+            except Exception:
+                continue
+            if amt == 0:
+                continue
+
+            from_key = (from_hs, from_desc)
+            to_key = (to_hs, to_desc)
+
+            if from_key in agg and float(agg[from_key]["carton"] or 0.0) == 0.0:
+                agg[from_key]["gross"] -= amt
+                agg[to_key]["gross"] += amt
+
+        for key, v in agg.items():
+            if float(v["carton"] or 0.0) == 0.0:
+                v["gross"] = 0.0
+            elif v["gross"] < 0:
+                v["gross"] = 0.0
+
+    return agg
+
+
+def _parse_sub_orders(inv_str: str) -> str:
+    if not inv_str:
+        return ""
+    parts = [p.strip() for p in str(inv_str).split(",") if p.strip()]
+    nums = []
+    for p in parts:
+        m = re.search(r"(\d+)\s*$", p)
+        if m:
+            nums.append(str(int(m.group(1))))
+        else:
+            m2 = re.search(r"(\d+)", p)
+            if m2:
+                nums.append(str(int(m2.group(1))))
+    seen = set()
+    out = []
+    for n in nums:
+        if n not in seen:
+            seen.add(n)
+            out.append(n)
+    return " ".join(out)
 
 
 def safe_sort_invoice_numbers(nums):
@@ -561,93 +927,34 @@ def safe_sort_invoice_numbers(nums):
             return (0, int(str(x)))
         except Exception:
             return (1, str(x))
-
     return sorted(nums, key=sort_key)
 
 
 def detect_container_prefix(uploaded_files):
     for f in uploaded_files:
-        if f.name.lower().endswith(".xlsx"):
+        if f.name.lower().endswith((".xlsx", ".xlsm")):
             return Path(f.name).stem.split("-")[0]
     return None
 
 
-def generate_combined_data(uploaded_files):
-    combined_data = {}
+def _copy_template_row_style(ws, target_row, template_row=3, max_col=66):
+    from copy import copy
+    for c in range(1, max_col + 1):
+        src = ws.cell(template_row, c)
+        dst = ws.cell(target_row, c)
+        dst.font = copy(src.font)
+        dst.fill = copy(src.fill)
+        dst.border = copy(src.border)
+        dst.alignment = copy(src.alignment)
+        dst.number_format = src.number_format
+        dst.protection = copy(src.protection)
 
-    for uploaded_file in uploaded_files:
-        filename = uploaded_file.name
-        invoice_number = extract_invoice_number(filename)
 
-        raw = uploaded_file.getvalue()
-        wb = load_workbook(io.BytesIO(raw), data_only=True)
-
-        ws_inv = sheet_by_name_ci(wb, "INVOICE")
-        ws_pack = sheet_by_name_ci(wb, "PACKING LIST")
-
-        if ws_inv is None or ws_pack is None:
-            continue
-
-        sum_row_inv = find_sum_row(ws_inv, start_row=19, label_col="B")
-        sum_row_pack = find_sum_row(ws_pack, start_row=6, label_col="B")
-
-        if not sum_row_inv or not sum_row_pack:
-            continue
-
-        invoice_rows = list(ws_inv.iter_rows(min_row=20, max_row=sum_row_inv - 1))
-        packing_rows = list(ws_pack.iter_rows(min_row=6, max_row=sum_row_pack - 1))
-        length = min(len(invoice_rows), len(packing_rows))
-
-        last_nonzero_key = None
-
-        for i in range(length):
-            inv_row = invoice_rows[i]
-            pack_row = packing_rows[i]
-
-            description = inv_row[1].value
-            hs_code = inv_row[2].value
-            value_custom = inv_row[8].value
-            net_weight = inv_row[9].value
-            gross_weight = inv_row[10].value
-            cartons = pack_row[6].value
-
-            if not description or not hs_code:
-                continue
-
-            description = str(description).strip()
-            hs_code = str(hs_code).strip()
-
-            val_d = to_decimal_zero(value_custom)
-            net_d = to_decimal_zero(net_weight)
-            gross_d = to_decimal_zero(gross_weight)
-            cartons_d = to_decimal_zero(cartons)
-
-            key = (description, hs_code)
-
-            if key not in combined_data:
-                combined_data[key] = {
-                    "value": Decimal("0"),
-                    "net": Decimal("0"),
-                    "gross": Decimal("0"),
-                    "cartons": Decimal("0"),
-                    "invoices": set(),
-                }
-
-            if cartons_d == 0 and gross_d != 0:
-                if last_nonzero_key is not None:
-                    combined_data[last_nonzero_key]["gross"] += gross_d
-                gross_d = Decimal("0")
-
-            combined_data[key]["value"] += val_d
-            combined_data[key]["net"] += net_d
-            combined_data[key]["gross"] += gross_d
-            combined_data[key]["cartons"] += cartons_d
-            combined_data[key]["invoices"].add(str(invoice_number).strip())
-
-            if cartons_d != 0:
-                last_nonzero_key = key
-
-    return combined_data
+def _clear_sgs_rows(ws, start_row=3, max_col=66):
+    max_row = max(ws.max_row, start_row + 500)
+    for r in range(start_row, max_row + 1):
+        for c in range(1, max_col + 1):
+            ws.cell(r, c).value = None
 
 
 def create_sgs_file(uploaded_files, terminal_choice, bl_number):
@@ -657,67 +964,92 @@ def create_sgs_file(uploaded_files, terminal_choice, bl_number):
         raise FileNotFoundError(f"Template introuvable : {TEMPLATE_FILE}")
 
     container_prefix = detect_container_prefix(uploaded_files)
-
     if not container_prefix:
         raise ValueError("Impossible de détecter le numéro de conteneur depuis les fichiers uploadés.")
 
-    combined_data = generate_combined_data(uploaded_files)
+    all_value_lines = []
+    all_pl_lines = []
+    all_transfers = []
+
+    for uploaded_file in uploaded_files:
+        if not uploaded_file.name.lower().endswith((".xlsx", ".xlsm")):
+            continue
+        v_lines, pl_lines, transfers = sgs_collect_from_uploaded_file(uploaded_file)
+        all_value_lines.extend(v_lines)
+        all_pl_lines.extend(pl_lines)
+        all_transfers.extend(transfers)
+
+    agg = sgs_aggregate(all_value_lines, all_pl_lines, all_transfers)
 
     wb_template = load_workbook(template_path)
     ws = wb_template.active
 
     start_row = 3
-    current_row = start_row
+    _clear_sgs_rows(ws, start_row=start_row, max_col=66)
 
-    for (description, hs), data in combined_data.items():
-        invoice_str = " ".join(safe_sort_invoice_numbers(data["invoices"]))
+    items = []
+    for (hs, desc) in sorted(agg.keys(), key=lambda k: (k[0], k[1])):
+        d = agg[(hs, desc)]
+        if not str(hs or "").strip() or not str(desc or "").strip():
+            continue
+        items.append({
+            "hs": str(hs).strip(),
+            "desc": str(desc).strip(),
+            "carton": round(float(d.get("carton", 0.0) or 0.0), 2),
+            "net": round(float(d.get("net", 0.0) or 0.0), 2),
+            "gross": round(float(d.get("gross", 0.0) or 0.0), 2),
+            "value": round(float(d.get("value", 0.0) or 0.0), 2),
+            "sub_orders": _parse_sub_orders(", ".join(safe_sort_invoice_numbers(d.get("invoices", set()) or []))),
+        })
 
-        ws[f"B{current_row}"] = description
-        ws[f"A{current_row}"] = hs
-        ws[f"G{current_row}"] = float(data["value"])
-        ws[f"I{current_row}"] = float(data["net"])
-        ws[f"J{current_row}"] = float(data["gross"])
-        ws[f"AE{current_row}"] = float(data["cartons"])
-        ws[f"AO{current_row}"] = invoice_str
+    lines_count = len(items)
+    if lines_count == 0:
+        raise ValueError("Aucune ligne SGS générée. Vérifie les fichiers INVOICE / PACKING LIST.")
 
-        current_row += 1
+    year = datetime.now(ZoneInfo("Europe/Brussels")).year
 
-    last_row = current_row - 1
-    lines_count = max(0, last_row - start_row + 1)
+    for i, it in enumerate(items):
+        r = start_row + i
+        _copy_template_row_style(ws, r, template_row=3, max_col=66)
 
-    for r in range(start_row, last_row + 1):
+        ws[f"A{r}"] = it["hs"]
+        ws[f"B{r}"] = it["desc"]
+        ws[f"G{r}"] = it["value"]
+        ws[f"I{r}"] = it["net"]
+        ws[f"J{r}"] = it["gross"]
+        ws[f"AE{r}"] = it["carton"]
+        ws[f"AO{r}"] = it["sub_orders"]
+
         ws[f"H{r}"] = "EUR"
         ws[f"K{r}"] = "SGS0001863312"
         ws[f"M{r}"] = "NL-Dutch"
         ws[f"P{r}"] = "Rotterdam"
+        ws[f"R{r}"] = "BE0417688928"
         ws[f"T{r}"] = "BE-Belgian"
         ws[f"U{r}"] = "Hawe"
-        ws[f"R{r}"] = "BE0417688928"
         ws[f"V{r}"] = "Kruiningenstraat 188"
         ws[f"W{r}"] = "Schoten"
-        ws[f"X{r}"] = "2900"
+        ws[f"X{r}"] = 2900
         ws[f"AC{r}"] = "NM"
         ws[f"AD{r}"] = "CT-Carton"
         ws[f"AF{r}"] = "N705-Bill of lading"
         ws[f"AG{r}"] = bl_number.strip()
-        ws[f"AR{r}"] = "2026"
         ws[f"AN{r}"] = "N380-Commercial Invoice"
+        ws[f"AR{r}"] = year
         ws[f"AS{r}"] = "N730-Road consignment note"
         ws[f"AT{r}"] = container_prefix
-        ws[f"BN{r}"] = container_prefix
         ws[f"BL{r}"] = "CN-China"
         ws[f"BM{r}"] = "BE-Belgian"
+        ws[f"BN{r}"] = container_prefix
 
         if terminal_choice == "Delta":
             ws[f"N{r}"] = "E.C.T. DELTA B.V."
             ws[f"O{r}"] = "EUROPEAWEG 875"
             ws[f"Q{r}"] = "3199 LD"
-
         elif terminal_choice == "Euromax":
             ws[f"N{r}"] = "EUROMAX"
             ws[f"O{r}"] = "MAASVLAKTEWEG 951"
             ws[f"Q{r}"] = "3199 LZ"
-
         elif terminal_choice == "Empty":
             ws[f"N{r}"] = ""
             ws[f"O{r}"] = ""
