@@ -339,8 +339,8 @@ def check_file(uploaded_file):
                 merged_pack.append(f"J{r}")
 
         if merged_pack:
-            errors.append(
-                "Merged cells not allowed in PACKING LIST I/J area: "
+            warnings.append(
+                "Merged cells found in PACKING LIST I/J area. SGS generator will handle merged net/gross cells: "
                 + ", ".join(merged_pack[:20])
                 + (" ..." if len(merged_pack) > 20 else "")
             )
@@ -575,9 +575,10 @@ def sgs_to_float(value) -> float:
 
 
 def sgs_find_header_row_by_keyword(ws, col, keyword):
+    needle = str(keyword).strip().lower()
     for row in range(1, ws.max_row + 1):
         v = ws.cell(row=row, column=col).value
-        if isinstance(v, str) and keyword in v:
+        if isinstance(v, str) and needle in v.strip().lower():
             return row
     return None
 
@@ -1065,15 +1066,48 @@ def create_sgs_file(uploaded_files, terminal_choice, bl_number):
     return out_name, output.getvalue(), lines_count
 
 
+
+
+def build_sgs_preview(uploaded_files):
+    """Return aggregated SGS rows for on-screen preview, using the same logic as final output."""
+    all_value_lines = []
+    all_pl_lines = []
+    all_transfers = []
+
+    for uploaded_file in uploaded_files:
+        if not uploaded_file.name.lower().endswith((".xlsx", ".xlsm")):
+            continue
+        v_lines, pl_lines, transfers = sgs_collect_from_uploaded_file(uploaded_file)
+        all_value_lines.extend(v_lines)
+        all_pl_lines.extend(pl_lines)
+        all_transfers.extend(transfers)
+
+    agg = sgs_aggregate(all_value_lines, all_pl_lines, all_transfers)
+    rows = []
+    for (hs, desc) in sorted(agg.keys(), key=lambda k: (k[0], k[1])):
+        d = agg[(hs, desc)]
+        if not str(hs or "").strip() or not str(desc or "").strip():
+            continue
+        rows.append({
+            "HS code": str(hs).strip(),
+            "Description": str(desc).strip(),
+            "Carton": round(float(d.get("carton", 0.0) or 0.0), 2),
+            "Net": round(float(d.get("net", 0.0) or 0.0), 2),
+            "Gross": round(float(d.get("gross", 0.0) or 0.0), 2),
+            "Value": round(float(d.get("value", 0.0) or 0.0), 2),
+            "Invoices": _parse_sub_orders(", ".join(safe_sort_invoice_numbers(d.get("invoices", set()) or []))),
+        })
+    return rows
+
 # =========================
 # UI
 # =========================
 st.title("Final Check + SGS Generator")
-st.caption("Upload all invoice Excel files. If there are no errors, the app generates the SGS file.")
+st.caption("Upload all invoice Excel files. SGS uses the smart merged-carton logic from summary_hs_code.py and generates only the SGS template file.")
 
 uploaded_files = st.file_uploader(
     "Upload invoice Excel files (.xlsx)",
-    type=["xlsx"],
+    type=["xlsx", "xlsm"],
     accept_multiple_files=True,
 )
 
@@ -1191,6 +1225,24 @@ if uploaded_files:
             )
 
             bl_number = st.text_input("BL number")
+
+            with st.expander("Preview SGS calculation", expanded=False):
+                try:
+                    preview_rows = build_sgs_preview(uploaded_files)
+                    if preview_rows:
+                        preview_df = pd.DataFrame(preview_rows)
+                        st.dataframe(preview_df, use_container_width=True, hide_index=True)
+                        st.caption(
+                            f"Generated lines: {len(preview_rows)} | "
+                            f"Cartons: {preview_df['Carton'].sum():,.2f} | "
+                            f"Gross: {preview_df['Gross'].sum():,.2f} | "
+                            f"Net: {preview_df['Net'].sum():,.2f} | "
+                            f"Value: {preview_df['Value'].sum():,.2f}"
+                        )
+                    else:
+                        st.info("No SGS lines found for preview.")
+                except Exception as e:
+                    st.warning(f"Preview unavailable: {e}")
 
             if st.button("Generate SGS file", type="primary"):
                 try:
