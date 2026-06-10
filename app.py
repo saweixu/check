@@ -623,28 +623,40 @@ def create_sgs_workbook(agg_data, container_no, bl_number, terminal_choice, temp
         for c in range(1, 84):
             ws.cell(r, c).value = None
 
-    # Terminal columns N/O/P/Q
+    # Terminal columns K/N/O/P/Q
+    sgs_reference = ""
     sender_name = ""
     sender_address = ""
     sender_city = ""
     sender_postcode = ""
 
     if terminal_choice == "Delta":
+        sgs_reference = "SGSac94206311f08d"
         sender_name = "Delta"
         sender_address = "EUROPEAWEG 875"
         sender_city = "Rotterdam"
         sender_postcode = "3199 LD"
+
     elif terminal_choice == "Euromax":
+        sgs_reference = "SGS123456"
         sender_name = "Euromax"
         sender_address = "Maasvlakteweg 951"
         sender_city = "Rotterdam"
         sender_postcode = "3199 LZ"
-    # Empty => leave N/O/P/Q empty
+
+    elif terminal_choice == "RWG":
+        sgs_reference = "SGS7891011"
+        sender_name = "RWG"
+        sender_address = "Rotterdam Amoerweg 50"
+        sender_city = "Rotterdam"
+        sender_postcode = "3199 KD"
+
+    # Empty => leave K/N/O/P/Q empty
 
     year = datetime.now().year
     const = {
         "H": "EUR-Euro",
-        "K": "SGSac94206311f08d",
+        "K": sgs_reference,
         "M": "NL-Dutch",
         "N": sender_name,
         "O": sender_address,
@@ -768,7 +780,7 @@ if uploaded_files:
         st.divider()
         st.subheader("SGS Generation")
 
-        terminal = st.radio("Terminal", ["Delta", "Euromax", "Empty"], horizontal=True)
+        terminal = st.radio("Terminal", ["Delta", "Euromax", "RWG", "Empty"], horizontal=True)
         bl_number = st.text_input("Numéro BL")
 
         generate = st.button("Générer T1_SGS", type="primary")
