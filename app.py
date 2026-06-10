@@ -623,25 +623,30 @@ def create_sgs_workbook(agg_data, container_no, bl_number, terminal_choice, temp
         for c in range(1, 84):
             ws.cell(r, c).value = None
 
-    # Terminal columns O/P/Q
+    # Terminal columns N/O/P/Q
+    sender_name = ""
     sender_address = ""
     sender_city = ""
     sender_postcode = ""
+
     if terminal_choice == "Delta":
+        sender_name = "Delta"
         sender_address = "EUROPEAWEG 875"
         sender_city = "Rotterdam"
         sender_postcode = "3199 LD"
     elif terminal_choice == "Euromax":
+        sender_name = "Euromax"
         sender_address = "Maasvlakteweg 951"
         sender_city = "Rotterdam"
         sender_postcode = "3199 LZ"
-    # Empty => leave O/P/Q empty
+    # Empty => leave N/O/P/Q empty
 
     year = datetime.now().year
     const = {
         "H": "EUR-Euro",
         "K": "SGSac94206311f08d",
         "M": "NL-Dutch",
+        "N": sender_name,
         "O": sender_address,
         "P": sender_city,
         "Q": sender_postcode,
@@ -701,11 +706,6 @@ uploaded_files = st.file_uploader(
     accept_multiple_files=True,
 )
 
-template_upload = st.file_uploader(
-    "Template T1_SGS.xlsx (optionnel si le fichier est dans le même dossier que l'app)",
-    type=["xlsx"],
-    accept_multiple_files=False,
-)
 
 if uploaded_files:
     files_sorted = sorted(uploaded_files, key=lambda f: natural_key(f.name))
@@ -718,12 +718,8 @@ if uploaded_files:
             p.write_bytes(uf.getbuffer())
             saved_paths.append(p)
 
-        # Save template
-        if template_upload is not None:
-            template_path = tmpdir / TEMPLATE_NAME
-            template_path.write_bytes(template_upload.getbuffer())
-        else:
-            template_path = APP_DIR / TEMPLATE_NAME
+        # Template SGS fixe : T1_SGS.xlsx doit être dans le même dossier que cette app
+        template_path = APP_DIR / TEMPLATE_NAME
 
         # Final check
         results = [final_check_file(p) for p in saved_paths]
@@ -752,7 +748,7 @@ if uploaded_files:
         if files_errors == 0:
             st.success(f"{files_checked} file(s) passed with no blocking issue(s).")
         else:
-            st.error(f"{files_errors} file(s) have errors. SGS generation is blocked.")
+            st.error(f"{files_errors} file(s) have errors. SGS generation is still allowed.")
 
         st.subheader("Summary")
         st.dataframe(df, use_container_width=True, hide_index=True)
@@ -775,11 +771,11 @@ if uploaded_files:
         terminal = st.radio("Terminal", ["Delta", "Euromax", "Empty"], horizontal=True)
         bl_number = st.text_input("Numéro BL")
 
-        generate = st.button("Générer T1_SGS", type="primary", disabled=(files_errors > 0))
+        generate = st.button("Générer T1_SGS", type="primary")
 
         if generate:
             if not template_path.exists():
-                st.error("Template T1_SGS.xlsx introuvable. Mets T1_SGS.xlsx dans le même dossier que app_sgs_streamlit.py ou upload le template.")
+                st.error("Template T1_SGS.xlsx introuvable. Mets T1_SGS.xlsx dans le même dossier que app_sgs_streamlit.py.")
             elif not bl_number.strip():
                 st.error("Complète le numéro BL avant de générer.")
             else:
