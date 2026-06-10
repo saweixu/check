@@ -596,7 +596,7 @@ def copy_row_style(ws, source_row, target_row, max_col=83):
 def create_sgs_workbook(agg_data, container_no, bl_number, terminal_choice, template_path):
     wb = load_workbook(template_path)
     if "Data" not in wb.sheetnames:
-        raise ValueError("Template .xlsx: feuille 'Data' introuvable")
+        raise ValueError("Template T1_SGS.xlsx: feuille 'Data' introuvable")
     ws = wb["Data"]
 
     items = []
@@ -701,11 +701,11 @@ uploaded_files = st.file_uploader(
     accept_multiple_files=True,
 )
 
-TEMPLATE_FILE = "T1_SGS.xlsx"
-
-if not os.path.exists(TEMPLATE_FILE):
-    st.error("T1_SGS.xlsx introuvable dans le dossier de l'application.")
-    st.stop()
+template_upload = st.file_uploader(
+    "Template T1_SGS.xlsx (optionnel si le fichier est dans le même dossier que l'app)",
+    type=["xlsx"],
+    accept_multiple_files=False,
+)
 
 if uploaded_files:
     files_sorted = sorted(uploaded_files, key=lambda f: natural_key(f.name))
