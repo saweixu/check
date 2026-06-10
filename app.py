@@ -638,14 +638,14 @@ def create_sgs_workbook(agg_data, container_no, bl_number, terminal_choice, temp
         sender_postcode = "3199 LD"
 
     elif terminal_choice == "Euromax":
-        sgs_reference = "SGS123456"
+        sgs_reference = "SGS1b1ec70d11f183c6db474ae2aff2"
         sender_name = "Euromax"
         sender_address = "Maasvlakteweg 951"
         sender_city = "Rotterdam"
         sender_postcode = "3199 LZ"
 
     elif terminal_choice == "RWG":
-        sgs_reference = "SGS7891011"
+        sgs_reference = "SGSb9034ef211f199a9f393261b7999"
         sender_name = "RWG"
         sender_address = "Rotterdam Amoerweg 50"
         sender_city = "Rotterdam"
