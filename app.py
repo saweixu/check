@@ -640,12 +640,12 @@ def create_sgs_workbook(agg_data, container_no, bl_number, terminal_choice, temp
     year = datetime.now().year
     const = {
         "H": "EUR-Euro",
-        "K": "SGS0001863312",
+        "K": "SGSac94206311f08d",
         "M": "NL-Dutch",
         "O": sender_address,
         "P": sender_city,
         "Q": sender_postcode,
-        "R": "BE0536581432",
+        "R": "BE0417688928",
         "T": "BE-Belgian",
         "U": "Hawe",
         "V": "Kruiningenstraat 188",
